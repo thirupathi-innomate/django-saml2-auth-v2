@@ -137,18 +137,32 @@ def denied(r):
     return render(r, 'django_saml2_auth/denied.html')
 
 
-def _create_new_user(username, email, firstname, lastname):
+def _create_new_user(username, email, firstname, lastname, member_of):
     user = User.objects.create_user(username, email)
     user.first_name = firstname
     user.last_name = lastname
-    groups = [Group.objects.get(name=x) for x in settings.SAML2_AUTH.get('NEW_USER_PROFILE', {}).get('USER_GROUPS', [])]
+    user.is_active = settings.SAML2_AUTH.get('NEW_USER_PROFILE', {}).get('ACTIVE_STATUS', True)
+    user.is_staff = settings.SAML2_AUTH.get('NEW_USER_PROFILE', {}).get('STAFF_STATUS', True)
+    user.is_superuser = settings.SAML2_AUTH.get('NEW_USER_PROFILE', {}).get('SUPERUSER_STATUS', False)
+    user.save()
+    for x in member_of:
+        try:
+            groups = Group.objects.get(name=x)
+            print(groups)
+            print(user, user.groups, x)
+        except Group.DoesNotExist:
+            print("Group Doesn't exist", x)
+            new_group_should_be_created = settings.SAML2_AUTH.get('CREATE_GROUP', True)
+            if new_group_should_be_created:
+                group = Group.objects.create(name=x)
+                group.save()
+            else:
+                return HttpResponseRedirect(get_reverse([denied, 'denied', 'django_saml2_auth:denied']))
+    groups = [Group.objects.get(name=x) for x in member_of]
     if parse_version(get_version()) >= parse_version('2.0'):
         user.groups.set(groups)
     else:
         user.groups = groups
-    user.is_active = settings.SAML2_AUTH.get('NEW_USER_PROFILE', {}).get('ACTIVE_STATUS', True)
-    user.is_staff = settings.SAML2_AUTH.get('NEW_USER_PROFILE', {}).get('STAFF_STATUS', True)
-    user.is_superuser = settings.SAML2_AUTH.get('NEW_USER_PROFILE', {}).get('SUPERUSER_STATUS', False)
     user.save()
     return user
 
@@ -177,6 +191,7 @@ def acs(r):
     user_name = user_identity[settings.SAML2_AUTH.get('ATTRIBUTES_MAP', {}).get('username', 'UserName')][0]
     user_first_name = user_identity[settings.SAML2_AUTH.get('ATTRIBUTES_MAP', {}).get('first_name', 'FirstName')][0]
     user_last_name = user_identity[settings.SAML2_AUTH.get('ATTRIBUTES_MAP', {}).get('last_name', 'LastName')][0]
+    member_of = user_identity[settings.SAML2_AUTH.get('ATTRIBUTES_MAP', {}).get('member_of', 'MemberOf')]
 
     target_user = None
     is_new_user = False
