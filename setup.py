@@ -60,7 +60,7 @@ setup(
 
     packages=find_packages(),
 
-    install_requires=['pysaml2>=4.5.0',
+    install_requires=['pysaml2==5.1.0',
                       'djangorestframework-jwt',
                       'django-rest-auth', ],
     include_package_data=True,
