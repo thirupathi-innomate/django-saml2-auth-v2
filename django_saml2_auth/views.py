@@ -138,33 +138,44 @@ def denied(r):
 
 
 def _create_new_user(username, email, firstname, lastname, member_of):
-    user = User.objects.create_user(username, email)
-    user.first_name = firstname
-    user.last_name = lastname
-    user.is_active = settings.SAML2_AUTH.get('NEW_USER_PROFILE', {}).get('ACTIVE_STATUS', True)
-    user.is_staff = settings.SAML2_AUTH.get('NEW_USER_PROFILE', {}).get('STAFF_STATUS', True)
-    user.is_superuser = settings.SAML2_AUTH.get('NEW_USER_PROFILE', {}).get('SUPERUSER_STATUS', False)
-    user.save()
-    for x in member_of:
-        try:
-            groups = Group.objects.get(name=x)
-            print(groups)
-            print(user, user.groups, x)
-        except Group.DoesNotExist:
-            print("Group Doesn't exist", x)
-            new_group_should_be_created = settings.SAML2_AUTH.get('CREATE_GROUP', True)
-            if new_group_should_be_created:
-                group = Group.objects.create(name=x)
-                group.save()
-            else:
-                return HttpResponseRedirect(get_reverse([denied, 'denied', 'django_saml2_auth:denied']))
-    groups = [Group.objects.get(name=x) for x in member_of]
-    if parse_version(get_version()) >= parse_version('2.0'):
-        user.groups.set(groups)
-    else:
-        user.groups = groups
-    user.save()
-    return user
+    matched_groups = match_ad_django_groups(member_of)
+    if len(matched_groups) > 0 :
+        user = User.objects.create_user(username, email)
+        user.first_name = firstname
+        user.last_name = lastname
+        user.is_active = settings.SAML2_AUTH.get('NEW_USER_PROFILE', {}).get('ACTIVE_STATUS', True)
+        user.is_staff = settings.SAML2_AUTH.get('NEW_USER_PROFILE', {}).get('STAFF_STATUS', True)
+        user.is_superuser = settings.SAML2_AUTH.get('NEW_USER_PROFILE', {}).get('SUPERUSER_STATUS', False)
+        groups = [Group.objects.get(name=x) for x in matched_groups]
+        if parse_version(get_version()) >= parse_version('2.0'):
+            user.groups.set(groups)
+        else:
+            user.groups = groups
+        user.save()
+        return user
+    return "Denied"
+
+def _sync_user_groups(user, member_of):
+    matched_groups = match_ad_django_groups(member_of)
+    user_current_groups = list(user.groups.values_list('name',flat = True))
+    print("User current Groups", user_current_groups)
+    if sorted(matched_groups) != sorted(user_current_groups):
+        user.groups.clear()
+        set_groups = [Group.objects.get(name=x) for x in matched_groups]
+        if parse_version(get_version()) >= parse_version('2.0'):
+            user.groups.set(set_groups)
+        else:
+            user.groups = groups
+        user.save()
+
+
+def match_ad_django_groups(member_of):
+    django_groups = list(Group.objects.all().values_list('name', flat=True))
+    print("Django Groups:", django_groups)
+    print(member_of)
+    matched_groups = [x for x in django_groups if x in member_of]
+    print("matched groups", matched_groups)
+    return matched_groups
 
 
 @csrf_exempt
@@ -191,8 +202,11 @@ def acs(r):
     user_name = user_identity[settings.SAML2_AUTH.get('ATTRIBUTES_MAP', {}).get('username', 'UserName')][0]
     user_first_name = user_identity[settings.SAML2_AUTH.get('ATTRIBUTES_MAP', {}).get('first_name', 'FirstName')][0]
     user_last_name = user_identity[settings.SAML2_AUTH.get('ATTRIBUTES_MAP', {}).get('last_name', 'LastName')][0]
-    member_of = user_identity[settings.SAML2_AUTH.get('ATTRIBUTES_MAP', {}).get('member_of', 'MemberOf')]
-
+    memberof = settings.SAML2_AUTH.get('ATTRIBUTES_MAP', {}).get('member_of', 'MemberOf')
+    if memberof in user_identity:
+        member_of = user_identity[memberof]
+    else :
+        member_of = []
     target_user = None
     is_new_user = False
 
@@ -204,6 +218,8 @@ def acs(r):
         new_user_should_be_created = settings.SAML2_AUTH.get('CREATE_USER', True)
         if new_user_should_be_created: 
             target_user = _create_new_user(user_name, user_email, user_first_name, user_last_name, member_of)
+            if target_user == "Denied":
+                return HttpResponseRedirect(get_reverse([denied, 'denied', 'django_saml2_auth:denied']))
             if settings.SAML2_AUTH.get('TRIGGER', {}).get('CREATE_USER', None):
                 import_string(settings.SAML2_AUTH['TRIGGER']['CREATE_USER'])(user_identity)
             is_new_user = True
@@ -214,6 +230,7 @@ def acs(r):
 
     if target_user.is_active:
         target_user.backend = 'django.contrib.auth.backends.ModelBackend'
+        _sync_user_groups(target_user, member_of)
         login(r, target_user)
     else:
         return HttpResponseRedirect(get_reverse([denied, 'denied', 'django_saml2_auth:denied']))
