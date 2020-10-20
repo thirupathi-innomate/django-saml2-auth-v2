@@ -158,7 +158,6 @@ def _create_new_user(username, email, firstname, lastname, member_of):
 def _sync_user_groups(user, member_of):
     matched_groups = match_ad_django_groups(member_of)
     user_current_groups = list(user.groups.values_list('name',flat = True))
-    print("User current Groups", user_current_groups)
     if sorted(matched_groups) != sorted(user_current_groups):
         user.groups.clear()
         set_groups = [Group.objects.get(name=x) for x in matched_groups]
@@ -229,11 +228,10 @@ def acs(r):
     if target_user.is_active:
         matched_groups=_sync_user_groups(target_user, member_of)
         if len(matched_groups)>0:
-            print("User is active")
             target_user.backend = 'django.contrib.auth.backends.ModelBackend'
             login(r, target_user)
         else :
-            print("User doesn't part of valid groups, so denied")
+            target_user.delete()
             return HttpResponseRedirect(get_reverse([denied, 'denied', 'django_saml2_auth:denied']))
     else:
         return HttpResponseRedirect(get_reverse([denied, 'denied', 'django_saml2_auth:denied']))
