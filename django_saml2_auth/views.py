@@ -167,14 +167,12 @@ def _sync_user_groups(user, member_of):
         else:
             user.groups = groups
         user.save()
+    return matched_groups
 
 
 def match_ad_django_groups(member_of):
     django_groups = list(Group.objects.all().values_list('name', flat=True))
-    print("Django Groups:", django_groups)
-    print(member_of)
     matched_groups = [x for x in django_groups if x in member_of]
-    print("matched groups", matched_groups)
     return matched_groups
 
 
@@ -229,9 +227,14 @@ def acs(r):
     r.session.flush()
 
     if target_user.is_active:
-        target_user.backend = 'django.contrib.auth.backends.ModelBackend'
-        _sync_user_groups(target_user, member_of)
-        login(r, target_user)
+        matched_groups=_sync_user_groups(target_user, member_of)
+        if len(matched_groups)>0:
+            print("User is active")
+            target_user.backend = 'django.contrib.auth.backends.ModelBackend'
+            login(r, target_user)
+        else :
+            print("User doesn't part of valid groups, so denied")
+            return HttpResponseRedirect(get_reverse([denied, 'denied', 'django_saml2_auth:denied']))
     else:
         return HttpResponseRedirect(get_reverse([denied, 'denied', 'django_saml2_auth:denied']))
 
